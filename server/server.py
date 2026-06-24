@@ -1,24 +1,27 @@
 import json
 
-from protocol.network import create_server_socket
-from protocol.packet import Packet
 from protocol.constants import *
+from protocol.network import create_server_socket
+from protocol.reliable_udp import ReliableUDP
+from protocol.packet import Packet
 from server.file_manager import list_files, file_exists, read_file, write_file
 
-server = create_server_socket()
+server_socket = create_server_socket()
+reliable = ReliableUDP(server_socket)
 
 print("Servidor iniciado...")
+
 
 with open("server/users.json", "r", encoding="utf-8") as file:
     users = json.load(file)
 
+
 while True:
 
-    data, address = server.recvfrom(BUFFER_SIZE)
+    packet, address = reliable.receive()
 
-    packet = Packet.from_bytes(data)
     print(
-    f"Recibido -> Tipo:{packet.packet_type} Seq:{packet.sequence}"
+        f"[RX] Tipo={packet.packet_type} Seq={packet.sequence}"
     )
 
     if packet.packet_type == LOGIN:
@@ -27,62 +30,54 @@ while True:
 
         if users.get(username) == password:
 
-            response = Packet(
-                packet_type=SUCCESS,
-                sequence=0,
-                ack=packet.sequence,
-                payload=b"LOGIN_OK"
+            reliable.send_ack(
+                packet.sequence,
+                b"LOGIN_OK",
+                address,
+                SUCCESS
             )
 
         else:
 
-            response = Packet(
-                packet_type=ERROR,
-                sequence=0,
-                ack=packet.sequence,
-                payload=b"LOGIN_ERROR"
+            reliable.send_ack(
+                packet.sequence,
+                b"LOGIN_ERROR",
+                address,
+                ERROR
             )
-
-        server.sendto(response.to_bytes(), address)
 
     elif packet.packet_type == LIST:
 
-        files = list_files()
+        files = "\n".join(list_files())
 
-        response = Packet(
-            packet_type=SUCCESS,
-            sequence=0,
-            ack=packet.sequence,
-            payload="\n".join(files).encode()
+        reliable.send_ack(
+            packet.sequence,
+            files.encode(),
+            address,
+            SUCCESS
         )
-
-        server.sendto(response.to_bytes(), address)
 
     elif packet.packet_type == DOWNLOAD:
 
         filename = packet.payload.decode()
 
-        if not file_exists(filename):
+        if file_exists(filename):
 
-            response = Packet(
-                packet_type=ERROR,
-                sequence=0,
-                ack=packet.sequence,
-                payload=b"FILE_NOT_FOUND"
+            reliable.send_ack(
+                packet.sequence,
+                read_file(filename),
+                address,
+                DATA
             )
 
         else:
 
-            content = read_file(filename)
-
-            response = Packet(
-                packet_type=DATA,
-                sequence=0,
-                ack=packet.sequence,
-                payload=content
+            reliable.send_ack(
+                packet.sequence,
+                b"FILE_NOT_FOUND",
+                address,
+                ERROR
             )
-
-        server.sendto(response.to_bytes(), address)
 
     elif packet.packet_type == UPLOAD:
 
@@ -92,11 +87,9 @@ while True:
 
         write_file(filename, content)
 
-        response = Packet(
-            packet_type=SUCCESS,
-            sequence=0,
-            ack=packet.sequence,
-            payload=b"UPLOAD_OK"
+        reliable.send_ack(
+            packet.sequence,
+            b"UPLOAD_OK",
+            address,
+            SUCCESS
         )
-
-        server.sendto(response.to_bytes(), address)

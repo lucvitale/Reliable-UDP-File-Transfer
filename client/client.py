@@ -1,8 +1,10 @@
-from protocol.network import create_client_socket
-from protocol.packet import Packet
 from protocol.constants import *
+from protocol.network import create_client_socket
+from protocol.reliable_udp import ReliableUDP
 
-client = create_client_socket()
+client_socket = create_client_socket()
+
+reliable = ReliableUDP(client_socket)
 
 filename = "cliente.txt"
 
@@ -11,23 +13,20 @@ with open(f"downloads/{filename}", "rb") as file:
 
 payload = filename.encode() + b"||" + content
 
-packet = Packet(
+response = reliable.send(
     packet_type=UPLOAD,
-    sequence=1,
-    ack=0,
-    payload=payload
+    payload=payload,
+    address=(SERVER_HOST, SERVER_PORT)
 )
 
-client.sendto(
-    packet.to_bytes(),
-    (SERVER_HOST, SERVER_PORT)
-)
+print()
 
-data, _ = client.recvfrom(BUFFER_SIZE)
+print("Respuesta del servidor")
 
-response = Packet.from_bytes(data)
-print(
-    f"ACK recibido: {response.ack}"
-)
+print("----------------------")
+
+print("ACK :", response.ack)
+
+print("Tipo:", response.packet_type)
 
 print(response.payload.decode())
