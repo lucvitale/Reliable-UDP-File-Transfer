@@ -4,11 +4,14 @@ from protocol.constants import *
 
 client = create_client_socket()
 
+username = "admin"
+password = "1234"
+
 packet = Packet(
     packet_type=LOGIN,
     sequence=1,
     ack=0,
-    payload=b"Hola servidor"
+    payload=f"{username}:{password}".encode()
 )
 
 client.sendto(
@@ -16,7 +19,7 @@ client.sendto(
     (SERVER_HOST, SERVER_PORT)
 )
 
-data, _ = client.recvfrom(4096)
+data, _ = client.recvfrom(BUFFER_SIZE)
 
 response = Packet.from_bytes(data)
 
