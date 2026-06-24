@@ -1,9 +1,9 @@
 import json
-import os
 
 from protocol.network import create_server_socket
 from protocol.packet import Packet
 from protocol.constants import *
+from server.file_manager import list_files, file_exists, read_file, write_file
 
 server = create_server_socket()
 
@@ -44,7 +44,7 @@ while True:
 
     elif packet.packet_type == LIST:
 
-        files = os.listdir("shared")
+        files = list_files()
 
         response = Packet(
             packet_type=SUCCESS,
@@ -58,9 +58,8 @@ while True:
     elif packet.packet_type == DOWNLOAD:
 
         filename = packet.payload.decode()
-        filepath = os.path.join("shared", filename)
 
-        if not os.path.exists(filepath):
+        if not file_exists(filename):
 
             response = Packet(
                 packet_type=ERROR,
@@ -71,8 +70,7 @@ while True:
 
         else:
 
-            with open(filepath, "rb") as file:
-                content = file.read()
+            content = read_file(filename)
 
             response = Packet(
                 packet_type=DATA,
@@ -89,8 +87,7 @@ while True:
 
         filename = filename.decode()
 
-        with open(os.path.join("shared", filename), "wb") as file:
-            file.write(content)
+        write_file(filename, content)
 
         response = Packet(
             packet_type=SUCCESS,
