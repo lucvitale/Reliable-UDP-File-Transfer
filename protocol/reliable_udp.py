@@ -12,16 +12,17 @@ from protocol.constants import (
     FRAGMENT_SIZE,
     MAX_RETRIES,
     TIMEOUT,
+    WINDOW_SIZE,
 )
 from protocol.packet import Packet
 
 
 class ReliableUDP:
-    """Stop-and-Wait reliable transport built on top of UDP.
+    """Go-Back-N reliable transport built on top of UDP.
 
-    The class keeps the public API intentionally small. It sends one packet at a
-    time, waits for its ACK, retransmits on timeout, and accepts only the next
-    expected sequence number from each peer.
+    The public API remains intentionally small. Internally the sender keeps a
+    sliding window of unacknowledged packets and retransmits the whole window
+    when the oldest unacknowledged packet times out.
     """
 
     def __init__(
@@ -30,6 +31,7 @@ class ReliableUDP:
         bind_address=None,
         timeout=TIMEOUT,
         max_retries=MAX_RETRIES,
+        window_size=WINDOW_SIZE,
     ):
         """Create a reliable UDP endpoint.
 
@@ -37,7 +39,8 @@ class ReliableUDP:
             sock: Optional UDP socket. When omitted, a new socket is created.
             bind_address: Optional local address tuple for server-style use.
             timeout: ACK wait timeout in seconds.
-            max_retries: Number of retransmission attempts after the first send.
+            max_retries: Number of whole-window retransmission rounds.
+            window_size: Maximum number of outstanding packets.
         """
         self.sock = sock or socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -46,6 +49,7 @@ class ReliableUDP:
 
         self.timeout = timeout
         self.max_retries = max_retries
+        self.window_size = window_size
 
         self.next_sequence = 1
         self.expected_sequence = {}
@@ -61,6 +65,7 @@ class ReliableUDP:
             "retransmissions": 0,
             "duplicates": 0,
             "timeouts": 0,
+            "duplicate_acks": 0,
             "checksum_errors": 0,
             "rtt_samples": [],
             "last_rtt": 0.0,
@@ -73,37 +78,23 @@ class ReliableUDP:
     def send_packet(self, packet, address):
         """Send one packet reliably to address.
 
-        DATA, FIN, and application packets use Stop-and-Wait. ACK packets are
-        control packets and are sent once without waiting for another ACK.
+        ACK packets are control packets and are sent once. Every other packet
+        uses the same Go-Back-N sender as file transfers, with a one-packet
+        batch.
         """
         if packet.packet_type == ACK:
             self._send_raw(packet, address)
             self.stats["acks_sent"] += 1
             return True
 
-        sequence = self.next_sequence
-        reliable_packet = replace(packet, sequence=sequence)
-
-        for attempt in range(self.max_retries + 1):
-            sent_at = time.monotonic()
-            self._send_raw(reliable_packet, address)
-
-            if attempt > 0:
-                self.stats["retransmissions"] += 1
-
-            if self._wait_for_ack(sequence, address, sent_at):
-                self.next_sequence += 1
-                return True
-
-            self.stats["timeouts"] += 1
-
-        raise TimeoutError(f"No ACK received for packet {sequence}")
+        self._send_packets_go_back_n([packet], address)
+        return True
 
     def receive_packet(self):
         """Receive the next in-order non-ACK packet.
 
         Duplicate packets are ACKed again and discarded. Out-of-order packets are
-        not delivered in Stop-and-Wait; the receiver repeats the last valid ACK.
+        not delivered in Go-Back-N; the receiver repeats the last cumulative ACK.
         """
         if self.pending_packets:
             return self.pending_packets.popleft()
@@ -124,10 +115,13 @@ class ReliableUDP:
         with open(path, "rb") as file:
             data = file.read()
 
-        for payload in self._fragment_data(data):
-            self.send_packet(Packet(DATA, 0, 0, payload), address)
+        packets = [
+            Packet(DATA, 0, 0, payload)
+            for payload in self._fragment_data(data)
+        ]
+        packets.append(Packet(FIN, 0, 0, b""))
 
-        self.send_packet(Packet(FIN, 0, 0, b""), address)
+        self._send_packets_go_back_n(packets, address)
         self._finish_transfer()
 
         return self.get_statistics()
@@ -163,28 +157,203 @@ class ReliableUDP:
 
         return stats
 
-    def _wait_for_ack(self, sequence, address, sent_at):
-        """Wait for the matching ACK while still handling incoming duplicates."""
+    def _send_packets_go_back_n(self, packets, address):
+        """Send packets with a Go-Back-N sliding window."""
+        if not packets:
+            return
+
+        window_size = max(1, self.window_size)
+        start_sequence = self.next_sequence
+        prepared = [
+            replace(packet, sequence=start_sequence + index)
+            for index, packet in enumerate(packets)
+        ]
+
+        base_index = 0
+        next_index = 0
+        retries = 0
+        unacked = {}
+
         old_timeout = self.sock.gettimeout()
-        self.sock.settimeout(self.timeout)
 
         try:
-            while True:
+            while base_index < len(prepared):
+                next_index = self._fill_window(
+                    prepared,
+                    base_index,
+                    next_index,
+                    window_size,
+                    address,
+                    unacked,
+                )
+
+                remaining = self._time_until_oldest_timeout(
+                    prepared,
+                    base_index,
+                    unacked,
+                )
+
+                if remaining <= 0:
+                    retries = self._retransmit_window(
+                        prepared,
+                        base_index,
+                        next_index,
+                        address,
+                        unacked,
+                        retries,
+                    )
+                    continue
+
+                self.sock.settimeout(remaining)
+
                 try:
                     packet, sender = self._recv_valid_packet()
                 except socket.timeout:
-                    return False
+                    retries = self._retransmit_window(
+                        prepared,
+                        base_index,
+                        next_index,
+                        address,
+                        unacked,
+                        retries,
+                    )
+                    continue
 
                 if self._is_ack(packet):
-                    if sender == address and packet.ack == sequence:
-                        self._record_rtt(sent_at)
-                        return True
+                    if sender != address:
+                        continue
+
+                    base_index, retries = self._handle_ack(
+                        packet.ack,
+                        prepared,
+                        base_index,
+                        next_index,
+                        unacked,
+                        retries,
+                    )
                     continue
 
                 if self._process_incoming_packet(packet, sender):
                     self.pending_packets.append((packet, sender))
         finally:
             self.sock.settimeout(old_timeout)
+
+        self.next_sequence = start_sequence + len(prepared)
+
+    def _fill_window(
+        self,
+        prepared,
+        base_index,
+        next_index,
+        window_size,
+        address,
+        unacked,
+    ):
+        """Send new packets until the Go-Back-N window is full."""
+        window_end = base_index + window_size
+
+        while next_index < len(prepared) and next_index < window_end:
+            self._send_and_track(
+                prepared[next_index],
+                address,
+                unacked,
+                retransmitted=False,
+            )
+            next_index += 1
+
+        return next_index
+
+    def _time_until_oldest_timeout(self, prepared, base_index, unacked):
+        """Return seconds left before the oldest unacked packet times out."""
+        oldest_sequence = prepared[base_index].sequence
+        oldest_sent_at = unacked[oldest_sequence]["sent_at"]
+        return self.timeout - (time.monotonic() - oldest_sent_at)
+
+    def _handle_ack(
+        self,
+        ack,
+        prepared,
+        base_index,
+        next_index,
+        unacked,
+        retries,
+    ):
+        """Apply a cumulative ACK and return updated base/retry values."""
+        new_base = self._apply_cumulative_ack(
+            ack,
+            prepared,
+            base_index,
+            next_index,
+            unacked,
+        )
+
+        if new_base == base_index:
+            self.stats["duplicate_acks"] += 1
+            return base_index, retries
+
+        return new_base, 0
+
+    def _retransmit_window(
+        self,
+        prepared,
+        base_index,
+        next_index,
+        address,
+        unacked,
+        retries,
+    ):
+        """Retransmit every outstanding packet after the oldest timeout."""
+        if retries >= self.max_retries:
+            sequence = prepared[base_index].sequence
+            raise TimeoutError(f"No cumulative ACK received for packet {sequence}")
+
+        self.stats["timeouts"] += 1
+
+        for index in range(base_index, next_index):
+            self._send_and_track(
+                prepared[index],
+                address,
+                unacked,
+                retransmitted=True,
+            )
+            self.stats["retransmissions"] += 1
+
+        return retries + 1
+
+    def _send_and_track(self, packet, address, unacked, retransmitted):
+        """Send a packet and remember ACK/RTT state for it."""
+        self._send_raw(packet, address)
+        unacked[packet.sequence] = {
+            "sent_at": time.monotonic(),
+            "retransmitted": retransmitted,
+        }
+
+    def _apply_cumulative_ack(
+        self,
+        ack,
+        prepared,
+        base_index,
+        next_index,
+        unacked,
+    ):
+        """Move the send base after a cumulative ACK."""
+        if ack < prepared[base_index].sequence:
+            return base_index
+
+        highest_sent = prepared[next_index - 1].sequence
+        ack = min(ack, highest_sent)
+        new_base = base_index
+
+        while new_base < next_index and prepared[new_base].sequence <= ack:
+            sequence = prepared[new_base].sequence
+            state = unacked.pop(sequence, None)
+
+            if state is not None and not state["retransmitted"]:
+                self._record_rtt(state["sent_at"])
+
+            new_base += 1
+
+        return new_base
 
     def _process_incoming_packet(self, packet, address):
         """ACK and classify a received non-ACK packet.
