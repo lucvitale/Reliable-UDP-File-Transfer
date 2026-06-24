@@ -1,4 +1,5 @@
 import socket
+import time
 
 from protocol.packet import Packet
 from protocol.constants import *
@@ -9,26 +10,36 @@ class Sender:
     def __init__(self, socket, session):
 
         self.socket = socket
-
         self.session = session
 
     def send_packet(self, packet_type, payload, address):
 
+        while not self.session.window.can_send():
+            self.process_ack()
+
+        sequence = self.session.window.next_sequence
+
         packet = Packet(
             packet_type=packet_type,
-            sequence=self.session.sequence,
+            sequence=sequence,
             ack=0,
             payload=payload
         )
 
+        self.session.window.add(packet)
+
+        send_time = time.time()
+
+        self.socket.sendto(
+            packet.to_bytes(),
+            address
+        )
+
+        self.session.bytes_sent += len(payload)
+
         retries = 0
 
         while retries < MAX_RETRIES:
-
-            self.socket.sendto(
-                packet.to_bytes(),
-                address
-            )
 
             try:
 
@@ -36,11 +47,13 @@ class Sender:
 
                 response = Packet.from_bytes(data)
 
-                if response.ack == self.session.sequence:
+                if response.packet_type == ACK:
 
-                    self.session.sequence += 1
+                    self.session.window.ack(response.ack)
 
-                    self.session.bytes_sent += len(payload)
+                    rtt = time.time() - send_time
+
+                    self.session.rtt.append(rtt)
 
                     return response
 
@@ -50,4 +63,29 @@ class Sender:
 
                 self.session.retransmissions += 1
 
-        raise TimeoutError()
+                print(f"Timeout -> retransmisión {retries}")
+
+                for pending in self.session.window.timeout_packets():
+
+                    self.socket.sendto(
+                        pending.to_bytes(),
+                        address
+                    )
+
+        raise TimeoutError("Máximo de retransmisiones alcanzado.")
+
+    def process_ack(self):
+
+        try:
+
+            data, _ = self.socket.recvfrom(BUFFER_SIZE)
+
+            packet = Packet.from_bytes(data)
+
+            if packet.packet_type == ACK:
+
+                self.session.window.ack(packet.ack)
+
+        except socket.timeout:
+
+            pass
