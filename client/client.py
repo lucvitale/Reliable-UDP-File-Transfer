@@ -26,5 +26,8 @@ client.sendto(
 data, _ = client.recvfrom(BUFFER_SIZE)
 
 response = Packet.from_bytes(data)
+print(
+    f"ACK recibido: {response.ack}"
+)
 
 print(response.payload.decode())

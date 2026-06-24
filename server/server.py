@@ -17,6 +17,9 @@ while True:
     data, address = server.recvfrom(BUFFER_SIZE)
 
     packet = Packet.from_bytes(data)
+    print(
+    f"Recibido -> Tipo:{packet.packet_type} Seq:{packet.sequence}"
+    )
 
     if packet.packet_type == LOGIN:
 
