@@ -4,13 +4,18 @@ from protocol.constants import *
 
 client = create_client_socket()
 
-filename = "mensaje.txt"
+filename = "cliente.txt"
+
+with open(f"downloads/{filename}", "rb") as file:
+    content = file.read()
+
+payload = filename.encode() + b"||" + content
 
 packet = Packet(
-    packet_type=DOWNLOAD,
+    packet_type=UPLOAD,
     sequence=1,
     ack=0,
-    payload=filename.encode()
+    payload=payload
 )
 
 client.sendto(
@@ -22,13 +27,4 @@ data, _ = client.recvfrom(BUFFER_SIZE)
 
 response = Packet.from_bytes(data)
 
-if response.packet_type == DATA:
-
-    with open(f"downloads/{filename}", "wb") as file:
-        file.write(response.payload)
-
-    print("Archivo descargado correctamente.")
-
-else:
-
-    print(response.payload.decode())
+print(response.payload.decode())

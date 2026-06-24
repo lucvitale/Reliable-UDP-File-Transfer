@@ -58,7 +58,6 @@ while True:
     elif packet.packet_type == DOWNLOAD:
 
         filename = packet.payload.decode()
-
         filepath = os.path.join("shared", filename)
 
         if not os.path.exists(filepath):
@@ -81,5 +80,23 @@ while True:
                 ack=packet.sequence,
                 payload=content
             )
+
+        server.sendto(response.to_bytes(), address)
+
+    elif packet.packet_type == UPLOAD:
+
+        filename, content = packet.payload.split(b"||", 1)
+
+        filename = filename.decode()
+
+        with open(os.path.join("shared", filename), "wb") as file:
+            file.write(content)
+
+        response = Packet(
+            packet_type=SUCCESS,
+            sequence=0,
+            ack=packet.sequence,
+            payload=b"UPLOAD_OK"
+        )
 
         server.sendto(response.to_bytes(), address)
