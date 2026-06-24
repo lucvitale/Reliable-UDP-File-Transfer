@@ -1,15 +1,9 @@
 from dataclasses import dataclass
 import struct
 
-HEADER_FORMAT = "!BIIH"
+from protocol.checksum import calculate_checksum, verify_checksum
 
-"""
-!  -> Network Byte Order (Big Endian)
-B  -> unsigned char (1 byte)   -> packet_type
-I  -> unsigned int  (4 bytes)  -> sequence
-I  -> unsigned int  (4 bytes)  -> ack
-H  -> unsigned short (2 bytes) -> payload_length
-"""
+HEADER_FORMAT = "!BIIH64s"
 
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
@@ -22,12 +16,16 @@ class Packet:
     payload: bytes
 
     def to_bytes(self):
+
+        checksum = calculate_checksum(self.payload).encode()
+
         header = struct.pack(
             HEADER_FORMAT,
             self.packet_type,
             self.sequence,
             self.ack,
-            len(self.payload)
+            len(self.payload),
+            checksum
         )
 
         return header + self.payload
@@ -38,12 +36,17 @@ class Packet:
         header = data[:HEADER_SIZE]
         payload = data[HEADER_SIZE:]
 
-        packet_type, sequence, ack, payload_length = struct.unpack(
+        packet_type, sequence, ack, payload_length, checksum = struct.unpack(
             HEADER_FORMAT,
             header
         )
 
         payload = payload[:payload_length]
+
+        checksum = checksum.decode().rstrip("\x00")
+
+        if not verify_checksum(payload, checksum):
+            raise ValueError("Checksum inválido")
 
         return Packet(
             packet_type,
