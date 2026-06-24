@@ -1,59 +1,36 @@
-import socket
+from protocol.sender import Sender
+from protocol.receiver import Receiver
+from protocol.session import Session
+from protocol.fragment import fragment_data, join_fragments
+
+from protocol.constants import *
 
 from protocol.packet import Packet
-from protocol.constants import *
 
 
 class ReliableUDP:
 
-    def __init__(self, sock: socket.socket):
+    def __init__(self, socket):
 
-        self.socket = sock
+        self.socket = socket
 
-        self.sequence = 1
+        self.session = Session()
+
+        self.sender = Sender(socket, self.session)
+
+        self.receiver = Receiver(socket, self.session)
 
     def send(self, packet_type, payload, address):
 
-        retries = 0
-
-        while retries < MAX_RETRIES:
-
-            packet = Packet(
-                packet_type=packet_type,
-                sequence=self.sequence,
-                ack=0,
-                payload=payload
-            )
-
-            self.socket.sendto(packet.to_bytes(), address)
-
-            try:
-
-                data, addr = self.socket.recvfrom(BUFFER_SIZE)
-
-                response = Packet.from_bytes(data)
-
-                if response.ack == self.sequence:
-
-                    self.sequence += 1
-
-                    return response
-
-            except socket.timeout:
-
-                retries += 1
-
-                print(f"Timeout. Reintentando ({retries}/{MAX_RETRIES})...")
-
-        raise TimeoutError("No se recibió ACK.")
+        return self.sender.send_packet(
+            packet_type,
+            payload,
+            address
+        )
 
     def receive(self):
 
-        data, address = self.socket.recvfrom(BUFFER_SIZE)
-
-        packet = Packet.from_bytes(data)
-
-        return packet, address
+        return self.receiver.receive_packet()
 
     def send_ack(self, sequence, payload, address, packet_type=SUCCESS):
 
@@ -64,4 +41,57 @@ class ReliableUDP:
             payload=payload
         )
 
-        self.socket.sendto(packet.to_bytes(), address)
+        self.socket.sendto(
+            packet.to_bytes(),
+            address
+        )
+
+    def send_file(self, packet_type, data, address):
+
+        fragments = fragment_data(data)
+
+        print(f"Enviando {len(fragments)} fragmentos")
+
+        for fragment in fragments:
+
+            self.send(
+                packet_type,
+                fragment,
+                address
+            )
+
+        self.send(
+            FIN,
+            b"",
+            address
+        )
+
+    def receive_file(self):
+
+        fragments = []
+
+        while True:
+
+            packet, address = self.receive()
+
+            if packet.packet_type == FIN:
+
+                self.send_ack(
+                    packet.sequence,
+                    b"FIN",
+                    address,
+                    ACK
+                )
+
+                break
+
+            fragments.append(packet.payload)
+
+            self.send_ack(
+                packet.sequence,
+                b"ACK",
+                address,
+                ACK
+            )
+
+        return join_fragments(fragments)
