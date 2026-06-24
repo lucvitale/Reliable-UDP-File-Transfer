@@ -54,3 +54,32 @@ while True:
         )
 
         server.sendto(response.to_bytes(), address)
+
+    elif packet.packet_type == DOWNLOAD:
+
+        filename = packet.payload.decode()
+
+        filepath = os.path.join("shared", filename)
+
+        if not os.path.exists(filepath):
+
+            response = Packet(
+                packet_type=ERROR,
+                sequence=0,
+                ack=packet.sequence,
+                payload=b"FILE_NOT_FOUND"
+            )
+
+        else:
+
+            with open(filepath, "rb") as file:
+                content = file.read()
+
+            response = Packet(
+                packet_type=DATA,
+                sequence=0,
+                ack=packet.sequence,
+                payload=content
+            )
+
+        server.sendto(response.to_bytes(), address)
