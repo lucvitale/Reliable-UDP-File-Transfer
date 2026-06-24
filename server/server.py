@@ -1,4 +1,5 @@
 import json
+import os
 
 from protocol.network import create_server_socket
 from protocol.packet import Packet
@@ -38,5 +39,18 @@ while True:
                 ack=packet.sequence,
                 payload=b"LOGIN_ERROR"
             )
+
+        server.sendto(response.to_bytes(), address)
+
+    elif packet.packet_type == LIST:
+
+        files = os.listdir("shared")
+
+        response = Packet(
+            packet_type=SUCCESS,
+            sequence=0,
+            ack=packet.sequence,
+            payload="\n".join(files).encode()
+        )
 
         server.sendto(response.to_bytes(), address)
