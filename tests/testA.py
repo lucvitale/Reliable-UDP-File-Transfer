@@ -1,16 +1,11 @@
-from protocol.packet import Packet
+from protocol.checksum import calculate_checksum, verify_checksum
 
-packet = Packet(
-    packet_type=1,
-    sequence=15,
-    ack=10,
-    payload=b"Hola Mundo"
-)
+data = b"Hola Mundo"
 
-raw = packet.to_bytes()
+checksum = calculate_checksum(data)
 
-print(raw)
+print(checksum)
 
-received = Packet.from_bytes(raw)
+print(verify_checksum(data, checksum))
 
-print(received)
+print(verify_checksum(b"Otro texto", checksum))
