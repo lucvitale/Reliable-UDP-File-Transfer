@@ -74,6 +74,11 @@ class ReliableUDP:
             "transfer_start": None,
             "transfer_end": None,
         }
+        
+        self.simulated_latency = 0.0   # segundos
+        self.packet_loss = 0.0         # entre 0.0 y 1.0
+
+
 
     def send_packet(self, packet, address):
         """Send one packet reliably to address.
@@ -146,16 +151,33 @@ class ReliableUDP:
                     self._finish_transfer()
                     return address, self.get_statistics()
 
+
     def get_statistics(self):
-        """Return a copy of transfer counters and derived measurements."""
-        stats = dict(self.stats)
-        samples = stats["rtt_samples"]
+        """Return transfer statistics."""
+        samples = self.stats["rtt_samples"]
 
-        stats["average_rtt"] = sum(samples) / len(samples) if samples else 0.0
-        stats["throughput_bps"] = self._calculate_throughput()
-        stats["rtt_samples"] = list(samples)
+        return {
+            "packets_sent": self.stats["packets_sent"],
+            "packets_received": self.stats["packets_received"],
+            "acks_sent": self.stats["acks_sent"],
+            "acks_received": self.stats["acks_received"],
+            "bytes_sent": self.stats["bytes_sent"],
+            "bytes_received": self.stats["bytes_received"],
+            "retransmissions": self.stats["retransmissions"],
+            "duplicates": self.stats["duplicates"],
+            "timeouts": self.stats["timeouts"],
+            "duplicate_acks": self.stats["duplicate_acks"],
+            "checksum_errors": self.stats["checksum_errors"],
+            "last_rtt": self.stats["last_rtt"],
+            "average_rtt": (
+                sum(samples) / len(samples)
+                if samples else 0.0
+            ),
+            "throughput_bps": self._calculate_throughput(),
+            "transfer_start": self.stats["transfer_start"],
+            "transfer_end": self.stats["transfer_end"],
+        }
 
-        return stats
 
     def _send_packets_go_back_n(self, packets, address):
         """Send packets with a Go-Back-N sliding window."""
@@ -407,6 +429,15 @@ class ReliableUDP:
             self._send_ack(last_received, address)
 
     def _send_raw(self, packet, address):
+        """Send one packet, optionally simulating latency and packet loss."""
+        import random
+
+        if random.random() < self.packet_loss:
+            return
+
+        if self.simulated_latency > 0:
+            time.sleep(self.simulated_latency)
+
         data = packet.to_bytes()
         self.sock.sendto(data, address)
 

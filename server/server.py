@@ -253,7 +253,37 @@ def main(port=SERVER_PORT):
     users = load_users()
     logged_clients = set()
     candidates = get_candidate_servers(port)
-    udp = ReliableUDP(bind_address=(SERVER_HOST, port))
+
+    print("\n===== Configuración del servidor =====")
+
+    default = input("¿Usar configuración por defecto? (S/N): ").strip().upper()
+
+    if default == "S":
+        latency = 0
+        loss = 0
+        window = 4
+        timeout = 0.5
+    else:
+        latency = float(input("Latencia (ms): "))
+        loss = float(input("Pérdida (%): "))
+        window = int(input("Window Size: "))
+        timeout = float(input("Timeout (s): "))
+
+    udp = ReliableUDP(
+        bind_address=(SERVER_HOST, port),
+        timeout=timeout,
+        window_size=window,
+    )
+
+    udp.simulated_latency = latency / 1000
+    udp.packet_loss = loss / 100
+
+    print("\n===== Configuración aplicada =====")
+    print(f"Latencia    : {latency} ms")
+    print(f"Pérdida     : {loss} %")
+    print(f"Ventana     : {window}")
+    print(f"Timeout     : {timeout} s")
+    print()
 
     os.makedirs(file_manager.SHARED_FOLDER, exist_ok=True)
 
