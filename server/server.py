@@ -1,7 +1,10 @@
 import json
 import os
+import sys
 
 from protocol.constants import (
+    ACK,
+    BUFFER_SIZE,
     DOWNLOAD_REQUEST,
     ERROR,
     LIST_REQUEST,
@@ -11,6 +14,10 @@ from protocol.constants import (
     SERVER_HOST,
     SERVER_PORT,
     UPLOAD_REQUEST,
+    CDN_SERVERS_REQUEST,
+    CDN_SERVERS_RESPONSE,
+    CDN_PING_REQUEST,
+    CDN_PING_RESPONSE,
 )
 from protocol.packet import Packet
 from protocol.reliable_udp import ReliableUDP
@@ -19,7 +26,6 @@ from server import file_manager
 
 USERS_FILE = os.path.join(os.path.dirname(__file__), "users.json")
 INVALID_FILENAME = "ERROR: invalid filename"
-
 
 def load_users():
     """Load valid username/password pairs from server/users.json."""
@@ -43,6 +49,27 @@ def decode_payload(packet):
 def send_response(udp, address, packet_type, payload):
     """Send every server response through ReliableUDP."""
     udp.send_packet(make_packet(packet_type, payload), address)
+
+
+def send_cdn_response(udp, address, packet_type, payload):
+    """Send Mini-CDN responses over plain UDP."""
+    packet = make_packet(packet_type, payload)
+    udp.sock.sendto(packet.to_bytes(), address)
+
+
+def get_candidate_servers(port):
+    """Return CDN candidates advertised by this server."""
+    ports = os.environ.get("CDN_SERVER_PORTS")
+
+    if ports:
+        server_ports = [int(value.strip()) for value in ports.split(",")]
+    else:
+        server_ports = [port]
+
+    return [
+        {"host": SERVER_HOST, "port": server_port}
+        for server_port in server_ports
+    ]
 
 
 def parse_login(payload):
@@ -140,7 +167,61 @@ def handle_download(udp, address, packet):
     udp.send_file(path, address)
 
 
-def handle_request(udp, address, packet, users, logged_clients):
+def handle_cdn_request(udp, address, packet, candidates):
+    """Handle Mini-CDN discovery and latency measurement."""
+    if packet.packet_type == CDN_SERVERS_REQUEST:
+        send_cdn_response(
+            udp,
+            address,
+            CDN_SERVERS_RESPONSE,
+            json.dumps(candidates),
+        )
+        return True
+
+    if packet.packet_type == CDN_PING_REQUEST:
+        send_cdn_response(
+            udp,
+            address,
+            CDN_PING_RESPONSE,
+            "OK",
+        )
+        return True
+
+    return False
+
+
+def receive_request(udp, candidates):
+    """Receive CDN packets with plain UDP and app packets with ReliableUDP."""
+    if udp.pending_packets:
+        return udp.pending_packets.popleft()
+
+    while True:
+        data, address = udp.sock.recvfrom(BUFFER_SIZE)
+
+        try:
+            packet = Packet.from_bytes(data)
+        except ValueError:
+            udp.stats["checksum_errors"] += 1
+            continue
+
+        if handle_cdn_request(udp, address, packet, candidates):
+            continue
+
+        if packet.packet_type == ERROR:
+            continue
+
+        if packet.packet_type == ACK:
+            udp.stats["acks_received"] += 1
+            continue
+
+        if udp._process_incoming_packet(packet, address):
+            return packet, address
+
+
+def handle_request(udp, address, packet, users, logged_clients, candidates):
+    if handle_cdn_request(udp, address, packet, candidates):
+        return
+
     try:
         if packet.packet_type == LOGIN_REQUEST:
             if handle_login(udp, address, packet, users):
@@ -168,20 +249,22 @@ def handle_request(udp, address, packet, users, logged_clients):
         send_response(udp, address, ERROR, "ERROR: invalid text payload")
 
 
-def main():
+def main(port=SERVER_PORT):
     users = load_users()
     logged_clients = set()
-    udp = ReliableUDP(bind_address=(SERVER_HOST, SERVER_PORT))
+    candidates = get_candidate_servers(port)
+    udp = ReliableUDP(bind_address=(SERVER_HOST, port))
 
     os.makedirs(file_manager.SHARED_FOLDER, exist_ok=True)
 
     try:
         while True:
-            packet, address = udp.receive_packet()
-            handle_request(udp, address, packet, users, logged_clients)
+            packet, address = receive_request(udp, candidates)
+            handle_request(udp, address, packet, users, logged_clients, candidates)
     finally:
         udp.sock.close()
 
 
 if __name__ == "__main__":
-    main()
+    server_port = int(sys.argv[1]) if len(sys.argv) > 1 else SERVER_PORT
+    main(server_port)
