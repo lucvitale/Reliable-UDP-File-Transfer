@@ -1,0 +1,487 @@
+# Proyecto Redes - Guía completa de ejecución y experimentación
+
+## 1. Abrir el proyecto
+
+Abrir PowerShell en la carpeta raíz del proyecto.
+
+Activar el entorno virtual:
+
+```
+powershell
+(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& ".\.venv\Scripts\Activate.ps1")
+```
+---
+
+# 2. Iniciar el servidor 5000
+
+```powershell
+
+$env:CDN_SERVER_PORTS="5000,5001"
+python -m server.server 5000
+
+```
+
+Al iniciar aparecerá:
+```
+===== Configuración del servidor =====
+¿Usar configuración por defecto? (S/N):
+```
+
+Si se responde:
+```
+S
+```
+
+Configuración por defecto:
+```
+Latencia = 0 ms
+Pérdida = 0 %
+Window Size = 4
+Timeout = 0.5 s
+```
+
+Si se responde:
+```
+N
+```
+
+El servidor pedirá:
+```
+Latencia (ms)
+Pérdida (%)
+Window Size
+Timeout (s)
+```
+
+---
+# 3. Iniciar el servidor 5001
+Abrir otra PowerShell.
+Activar el entorno:
+
+```powershell
+
+(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& ".\.venv\Scripts\Activate.ps1")
+
+```
+
+Ejecutar:
+```
+powershell
+
+$env:CDN_SERVER_PORTS="5000,5001"
+python -m server.server 5001
+
+```
+
+Configurar igual que el servidor 5000 (o con otros parámetros para experimentos).
+
+---
+
+# 4. Abrir el cliente
+Nueva PowerShell.
+Activar entorno:
+```
+powershell
+
+(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& ".\.venv\Scripts\Activate.ps1")
+
+```
+
+Entrar en Python:
+```powershell
+
+py
+
+```
+
+Importar funciones:
+```python
+
+from client.client import (
+    login,
+    list_files,
+    upload_file,
+    download_file,
+)
+
+import client.client as cc
+
+```
+
+---
+
+# 5. Login
+
+```python
+
+login("admin", "1234")
+
+```
+Resultado esperado:
+```python
+True
+```
+
+Durante el login se mostrará:
+```
+Selección Mini-CDN
+RTT de cada servidor
+Servidor seleccionado
+```
+
+---
+# 6. Listar archivos
+```
+python
+
+list_files()
+
+```
+
+---
+
+# 7. Upload
+Archivo pequeño:
+
+```python
+
+upload_file("archivo_1MB.bin")
+
+```
+Archivo mediano:
+
+```python
+
+upload_file("archivo_10MB.bin")
+
+```
+
+Archivo grande:
+
+```python
+
+upload_file("archivo_80MB.bin")
+
+```
+Todos deben devolver:
+```python
+True
+```
+
+---
+
+# 8. Download
+```python
+
+download_file(
+    "archivo_1MB.bin",
+    "downloads/experimentos/archivo_1MB.bin",
+)
+
+```
+
+```python
+
+download_file(
+    "archivo_10MB.bin",
+    "downloads/experimentos/archivo_10MB.bin",
+)
+
+```
+
+```python
+
+download_file(
+    "archivo_80MB.bin",
+    "downloads/experimentos/archivo_80MB.bin",
+)
+
+```
+
+Resultado esperado:
+```python
+True
+```
+
+---
+
+# 9. Estadísticas
+Siempre usar:
+```python
+
+stats = cc.udp.get_statistics()
+
+```
+
+Mostrará:
+```python
+print("RTT promedio:", stats["average_rtt"])
+print("Throughput:", stats["throughput_bps"])
+print("Retransmisiones:", stats["retransmissions"])
+print("Timeouts:", stats["timeouts"])
+```
+
+También puede verse todo:
+```
+python
+for clave, valor in stats.items():
+    if isinstance(valor, list):
+        print(f"{clave}: lista de {len(valor)} elementos")
+    else:
+        print(f"{clave}: {valor}")
+
+```
+
+---
+
+# 10. Verificar integridad
+
+Hash original:
+
+```powershell
+
+Get-FileHash archivo_1MB.bin -Algorithm SHA256
+
+```
+
+Hash descargado:
+
+```powershell
+
+Get-FileHash downloads\experimentos\archivo_1MB.bin -Algorithm SHA256
+
+```
+
+Los hashes deben coincidir.
+
+Repetir para 10 MB y 80 MB.
+
+---
+
+# Archivos de prueba
+Proyecto:
+```
+archivo_1MB.bin
+archivo_10MB.bin
+archivo_80MB.bin
+```
+
+Descargas:
+```
+downloads/experimentos/
+```
+
+Servidor:
+```
+shared/
+```
+
+---
+
+# Experimentos
+## Escenario 1
+Objetivo:
+Funcionamiento normal.
+
+Servidor 5000
+
+```
+Latencia: 0
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+Servidor 5001
+
+```
+Latencia: 0
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+Realizar:
+
+* Login
+* Upload 1 MB
+* Download 1 MB
+* Estadísticas
+
+---
+
+## Escenario 2
+Objetivo:
+Medir efecto de la latencia.
+
+Servidor 5000:
+```
+Latencia: 100
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+Servidor 5001:
+```
+Latencia: 100
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+Ejecutar:
+* Login
+* Upload 1 MB
+* Download 1 MB
+* Obtener estadísticas
+
+Registrar:
+* RTT
+* Throughput
+* Retransmisiones
+* Timeouts
+---
+
+## Escenario 3
+Objetivo:
+Alta latencia.
+
+Servidor 5000:
+```
+Latencia: 500
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+Servidor 5001:
+```
+Latencia: 500
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+Registrar nuevamente todas las métricas.
+
+---
+
+## Escenario 4
+Objetivo:
+Simular pérdidas.
+
+Servidor 5000:
+```
+Latencia: 100
+Pérdida: 5
+Ventana: 4
+Timeout: 0.5
+```
+
+Servidor 5001:
+```
+Latencia: 100
+Pérdida: 5
+Ventana: 4
+Timeout: 0.5
+```
+
+Esperado:
+* Retransmisiones > 0
+* Timeouts posiblemente > 0
+* Archivo íntegro
+* Hash correcto
+
+---
+
+## Escenario 5
+Mini-CDN
+
+Servidor 5000:
+```
+Latencia: 20
+```
+
+Servidor 5001
+```
+Latencia: 200
+```
+
+Esperado:
+```
+Seleccionado: 5000
+```
+
+---
+
+## Escenario 6
+Invertir.
+
+Servidor 5000:
+```
+Latencia: 200
+```
+
+Servidor 5001
+```
+Latencia: 20
+```
+
+Esperado:
+```
+Seleccionado:
+5001
+```
+
+---
+
+# Parámetros recomendados
+## Prueba rápida
+```
+Latencia: 0
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+---
+
+## Latencia media
+```
+Latencia: 100
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+---
+## Latencia alta
+```
+Latencia: 500
+Pérdida: 0
+Ventana: 4
+Timeout: 0.5
+```
+
+---
+## Simulación de red inestable
+```
+Latencia: 100
+Pérdida: 5
+Ventana: 4
+Timeout: 0.5
+```
+
+---
+## Red muy inestable
+
+```
+Latencia: 500
+Pérdida: 10
+Ventana: 4
+Timeout: 1.0
+```
+---
+
+FIN
