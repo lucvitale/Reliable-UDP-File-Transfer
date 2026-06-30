@@ -52,9 +52,9 @@ def send_response(udp, address, packet_type, payload):
 
 
 def send_cdn_response(udp, address, packet_type, payload):
-    """Send Mini-CDN responses over plain UDP."""
+    """Send Mini-CDN responses using the configured network simulation."""
     packet = make_packet(packet_type, payload)
-    udp.sock.sendto(packet.to_bytes(), address)
+    udp._send_raw(packet, address)
 
 
 def get_candidate_servers(port):
